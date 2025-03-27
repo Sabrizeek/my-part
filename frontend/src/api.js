@@ -13,8 +13,10 @@ export const createEvent = async (event) => {
   return response.data;
 };
 
-export const updateEvent = async (id, event) => {
-  const response = await API.put(`/${id}/update`, event);
+export const updateEvent = async (event) => {
+  console.log('API - Sending update request:', event);
+  const response = await API.put(`/${event._id}/update`, event);
+  console.log('API - Update response:', response.data);
   return response.data;
 };
 
