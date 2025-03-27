@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, DatePicker, Modal, Alert } from 'antd';
-import moment from 'moment';
+import { Form, Input, Button, Modal, Alert, Select, DatePicker } from 'antd';
+import moment from 'moment-timezone';
 import { createEvent } from '../api';
+
+const { Option } = Select;
 
 const AddEvent = ({ visible, onCancel, onSuccess }) => {
   const [form] = Form.useForm();
@@ -9,35 +11,46 @@ const AddEvent = ({ visible, onCancel, onSuccess }) => {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (values) => {
+    setLoading(true);
     try {
-      // Convert to UTC moments without local time conversion
-      const start = moment.utc(values.start.format('YYYY-MM-DD HH:mm'));
-      const end = moment.utc(values.end.format('YYYY-MM-DD HH:mm'));
-  
-      // Client-side validation with buffer
-      if (end.diff(start, 'minutes') < 59) {
-        throw new Error('End time must be at least 1 hour after start time');
+      // `start` and `end` are moment objects from DatePicker, already in Asia/Colombo timezone
+      const start = values.start;
+      const end = values.end;
+
+      console.log('Parsed Start (Local):', start.format('YYYY-MM-DD HH:mm'));
+      console.log('Parsed End (Local):', end.format('YYYY-MM-DD HH:mm'));
+      console.log('Start ISO:', start.toISOString());
+      console.log('End ISO:', end.toISOString());
+      console.log('Duration (minutes):', end.diff(start, 'minutes'));
+
+      if (!start.isValid() || !end.isValid()) {
+        throw new Error('Invalid date or time selected');
       }
-  
+      if (!end.isAfter(start)) {
+        throw new Error('End time must be after start time');
+      }
+      if (end.diff(start, 'minutes') < 60) {
+        throw new Error('Event must be at least 1 hour long');
+      }
+
       const payload = {
-        title: values.title,
-        describe: values.describe,
-        start: start.toISOString(),
-        end: end.toISOString()
+        title: values.title.trim(),
+        describe: values.describe?.trim(),
+        start: start.toDate(), // Convert to Date object for backend
+        end: end.toDate(),     // Convert to Date object for backend
+        reminder: values.reminder || null
       };
-  
-      await createEvent(payload);
+
+      console.log('Payload:', payload);
+      const response = await createEvent(payload);
       
       form.resetFields();
       setError(null);
-      onSuccess();
+      onSuccess(response);
       onCancel();
     } catch (error) {
       console.error('Creation error:', error);
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data || 
-                          error.message || 
-                          'Failed to create event';
+      const errorMessage = error.response?.data || error.message || 'Failed to create event';
       setError(errorMessage);
     } finally {
       setLoading(false);
@@ -46,11 +59,12 @@ const AddEvent = ({ visible, onCancel, onSuccess }) => {
 
   return (
     <Modal
-      title="Add New Event"
+      title="Add New Event (Local Time - Sri Lanka)"
       visible={visible}
       onCancel={() => {
-        onCancel();
+        form.resetFields();
         setError(null);
+        onCancel();
       }}
       footer={null}
       destroyOnClose
@@ -59,77 +73,94 @@ const AddEvent = ({ visible, onCancel, onSuccess }) => {
         <Alert
           message="Error"
           description={typeof error === 'object' ? 
-            Object.entries(error).map(([key, value]) => (
-              <div key={key}>{`${key}: ${value}`}</div>
-            )) : error}
+            Object.entries(error)
+              .filter(([_, value]) => value)
+              .map(([key, value]) => (
+                <div key={key}>{`${key}: ${value}`}</div>
+              )) : error}
           type="error"
           showIcon
           style={{ marginBottom: 16 }}
         />
       )}
 
-      <Form form={form} layout="vertical" onFinish={handleSubmit}>
+      <Form 
+        form={form} 
+        layout="vertical" 
+        onFinish={handleSubmit}
+        initialValues={{
+          start: null,
+          end: null,
+          reminder: null
+        }}
+      >
         <Form.Item
           label="Title"
           name="title"
-          rules={[{ 
-            required: true, 
-            message: 'Please input the event title!',
-            whitespace: true
-          }]}
+          rules={[
+            { required: true, message: 'Please input the event title!' },
+            { whitespace: true, message: 'Title cannot be empty spaces!' }
+          ]}
         >
-          <Input />
+          <Input placeholder="Enter event title" />
         </Form.Item>
 
         <Form.Item
-          label="Start Date & Time"
+          label="Start Date & Time (Local, Sri Lanka)"
           name="start"
-          rules={[{ 
-            required: true, 
-            message: 'Please select start date and time!' 
-          }]}
+          rules={[{ required: true, message: 'Please select the start date and time!' }]}
         >
           <DatePicker
-  showTime
-  format="YYYY-MM-DD HH:mm"
-  onChange={(value) => {
-    // Force UTC interpretation
-    return moment.utc(value.format('YYYY-MM-DD HH:mm'));
-  }}
-/>
+            showTime={{ format: 'HH:mm', minuteStep: 5 }}
+            format="YYYY-MM-DD HH:mm"
+            placeholder="Select start date and time"
+            style={{ width: '100%' }}
+            disabledDate={(current) => current && current < moment.tz('Asia/Colombo').startOf('day')}
+          />
         </Form.Item>
 
         <Form.Item
-          label="End Date & Time"
+          label="End Date & Time (Local, Sri Lanka)"
           name="end"
-          dependencies={['start']}
-          rules={[{ 
-            required: true,
-            message: 'Please select end date and time!',
-            validator: (_, value) => {
-              const start = form.getFieldValue('start');
-              if (start && value) {
-                const minEnd = moment(start).add(1, 'hour');
-                if (value.isBefore(minEnd)) {
-                  return Promise.reject('End must be at least 1 hour after start');
-                }
-              }
-              return Promise.resolve();
-            }
-          }]}
+          rules={[{ required: true, message: 'Please select the end date and time!' }]}
         >
-          <DatePicker 
-            showTime 
+          <DatePicker
+            showTime={{ format: 'HH:mm', minuteStep: 5 }}
             format="YYYY-MM-DD HH:mm"
+            placeholder="Select end date and time"
+            style={{ width: '100%' }}
             disabledDate={(current) => {
               const start = form.getFieldValue('start');
-              return start ? current < moment(start) : false;
+              return current && (!start || current < start.startOf('day'));
             }}
           />
         </Form.Item>
 
-        <Form.Item label="Description" name="describe">
-          <Input.TextArea rows={4} />
+        <Form.Item
+          label="Reminder (minutes before)"
+          name="reminder"
+        >
+          <Select 
+            allowClear 
+            placeholder="No reminder"
+            style={{ width: '100%' }}
+          >
+            <Option value={5}>5 minutes</Option>
+            <Option value={15}>15 minutes</Option>
+            <Option value={30}>30 minutes</Option>
+            <Option value={60}>1 hour</Option>
+            <Option value={120}>2 hours</Option>
+          </Select>
+        </Form.Item>
+
+        <Form.Item 
+          label="Description" 
+          name="describe"
+        >
+          <Input.TextArea 
+            rows={4} 
+            placeholder="Enter event description (optional)"
+          />
         </Form.Item>
 
         <Form.Item>
@@ -138,6 +169,7 @@ const AddEvent = ({ visible, onCancel, onSuccess }) => {
             htmlType="submit" 
             loading={loading}
             disabled={loading}
+            block
           >
             {loading ? 'Creating...' : 'Create Event'}
           </Button>
